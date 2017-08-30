@@ -7,7 +7,7 @@ import tensorflow as tf
 
 from tensorflow.python.framework import ops
 
-from utils import *
+from tf_gen_models.utils import *
 
 if "concat_v2" in dir(tf):
     def concat(tensors, axis, *args, **kwargs):
@@ -62,6 +62,11 @@ def deconv2d(input_, output_shape, k_h=5, k_w=5, d_h=2, d_w=2, name="deconv2d", 
 
 def lrelu(x, leak=0.2, name="lrelu"):
     return tf.maximum(x, leak*x)
+
+def selu(x, lamb=1.0507, alpha=1.6733, name="selu"):
+    # https://arxiv.org/pdf/1706.02515.pdf 
+    neg = tf.subtract(tf.multiply(alpha, tf.exp(x)), alpha) 
+    return tf.multiply(lamb, tf.maximum(x, neg))
 
 def linear(input_, output_size, scope=None, stddev=0.02, bias_start=0.0, with_w=False):
     shape = input_.get_shape().as_list()

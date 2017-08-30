@@ -1,14 +1,18 @@
 #-*- coding: utf-8 -*-
 from __future__ import division
-import os
-import time
+import os, sys, time
 import tensorflow as tf
 import numpy as np
 
-from ops import *
-from utils import *
+from tf_gen_models.ops import *
+from tf_gen_models.utils import *
+from Preprocessing import *
 
 class WGAN(object):
+    # These should be function pointers that are set before build_model is called
+    discriminator = None
+    generator = None
+
     def __init__(self, sess, epoch, batch_size, dataset_name, checkpoint_dir, result_dir, log_dir):
         self.sess = sess
         self.dataset_name = dataset_name
@@ -39,60 +43,51 @@ class WGAN(object):
             # load mnist
             self.data_X, self.data_y = load_mnist(self.dataset_name)
 
-            # get number of batches for a single epoch
-            self.num_batches = len(self.data_X) // self.batch_size
+        elif dataset_name == 'printer':
+            self.input_height = smallerImgHeight
+            self.input_width = smallerImgWidth
+            self.output_height = smallerImgHeight
+            self.output_width = smallerImgWidth
+
+            self.z_dim = 1024
+            self.c_dim = 1
+
+            # train
+            self.learning_rate = 0.0002
+            self.beta1 = 0.5
+
+            # test
+            self.sample_num = 64  # number of generated images to be saved
+
+            self.data_x, self.data_y = load_printer() #TODO
         else:
             raise NotImplementedError
-
-    def discriminator(self, x, is_training=True, reuse=False):
-        # Network Architecture is exactly same as in infoGAN (https://arxiv.org/abs/1606.03657)
-        # Architecture : (64)4c2s-(128)4c2s_BL-FC1024_BL-FC1_S
-        with tf.variable_scope("discriminator", reuse=reuse):
-
-            net = lrelu(conv2d(x, 64, 4, 4, 2, 2, name='d_conv1'))
-            net = lrelu(bn(conv2d(net, 128, 4, 4, 2, 2, name='d_conv2'), is_training=is_training, scope='d_bn2'))
-            net = tf.reshape(net, [self.batch_size, -1])
-            net = lrelu(bn(linear(net, 1024, scope='d_fc3'), is_training=is_training, scope='d_bn3'))
-            out_logit = linear(net, 1, scope='d_fc4')
-            out = tf.nn.sigmoid(out_logit)
-
-            return out, out_logit, net
-
-    def generator(self, z, is_training=True, reuse=False):
-        # Network Architecture is exactly same as in infoGAN (https://arxiv.org/abs/1606.03657)
-        # Architecture : FC1024_BR-FC7x7x128_BR-(64)4dc2s_BR-(1)4dc2s_S
-        with tf.variable_scope("generator", reuse=reuse):
-            net = tf.nn.relu(bn(linear(z, 1024, scope='g_fc1'), is_training=is_training, scope='g_bn1'))
-            net = tf.nn.relu(bn(linear(net, 128 * 7 * 7, scope='g_fc2'), is_training=is_training, scope='g_bn2'))
-            net = tf.reshape(net, [self.batch_size, 7, 7, 128])
-            net = tf.nn.relu(
-                bn(deconv2d(net, [self.batch_size, 14, 14, 64], 4, 4, 2, 2, name='g_dc3'), is_training=is_training,
-                   scope='g_bn3'))
-
-            out = tf.nn.sigmoid(deconv2d(net, [self.batch_size, 28, 28, 1], 4, 4, 2, 2, name='g_dc4'))
-
-            return out
+        # get number of batches for a single epoch
+        self.num_batches = len(self.data_X) // self.batch_size
 
     def build_model(self):
+        if self.discriminator == None or self.generator == None:
+            sys.stderr.write("You must set the discriminator and generator before calling build_mode.\n")
+            sys.stderr.flush()
+            sys.exit(-1)
         # some parameters
         image_dims = [self.input_height, self.input_width, self.c_dim]
-        bs = self.batch_size
 
         """ Graph Input """
         # images
-        self.inputs = tf.placeholder(tf.float32, [bs] + image_dims, name='real_images')
+        self.inputs = tf.placeholder(tf.float32, [self.batch_size] + image_dims, name='real_images')
 
         # noises
-        self.z = tf.placeholder(tf.float32, [bs, self.z_dim], name='z')
+        self.z = tf.placeholder(tf.float32, [self.batch_size, self.z_dim], name='z')
 
         """ Loss Function """
 
         # output of D for real images
-        D_real, D_real_logits, _ = self.discriminator(self.inputs, is_training=True, reuse=False)
+        D_real, D_real_logits, _ = self.discriminator(self.inputs, self.batch_size, is_training=True, reuse=False)
 
         # output of D for fake images
-        G = self.generator(self.z, is_training=True, reuse=False)
-        D_fake, D_fake_logits, _ = self.discriminator(G, is_training=True, reuse=True)
+        G = self.generator(self.z, self.batch_size, is_training=True, reuse=False)
+        D_fake, D_fake_logits, _ = self.discriminator(G, self.batch_size, is_training=True, reuse=True)
 
         # get loss for discriminator
         d_loss_real = - tf.reduce_mean(D_real)
@@ -121,7 +116,7 @@ class WGAN(object):
 
         """" Testing """
         # for test
-        self.fake_images = self.generator(self.z, is_training=False, reuse=True)
+        self.fake_images = self.generator(self.z, self.batch_size, is_training=False, reuse=True)
 
         """ Summary """
         d_loss_real_sum = tf.summary.scalar("d_loss_real", d_loss_real)
